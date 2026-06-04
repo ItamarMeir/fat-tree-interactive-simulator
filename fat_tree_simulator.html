@@ -287,6 +287,21 @@
     border-radius: 2px;
   }
 
+  .conn-header {
+    display: grid;
+    grid-template-columns: 12px minmax(0,1fr) minmax(0,1fr) 46px 46px 22px 22px;
+    gap: 4px;
+    padding: 4px 6px 2px;
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border: 1px solid var(--line);
+    border-bottom: none;
+    border-radius: 8px 8px 0 0;
+    background: rgba(0,0,0,0.03);
+  }
+  .conn-header span { text-align: center; }
   .conn-list {
     display: grid;
     gap: 8px;
@@ -295,13 +310,14 @@
     height: 160px;
     min-height: 36px;
     border: 1px solid var(--line);
-    border-radius: 8px 8px 0 0;
+    border-top: none;
+    border-radius: 0;
     padding: 6px;
     background: rgba(0,0,0,0.015);
   }
   .conn-row {
     display: grid;
-    grid-template-columns: 12px minmax(0,1fr) minmax(0,1fr) 46px 22px 22px;
+    grid-template-columns: 12px minmax(0,1fr) minmax(0,1fr) 46px 46px 22px 22px;
     gap: 4px;
     align-items: center;
     font-size: 11px;
@@ -492,7 +508,7 @@
             <input id="rate" type="number" min="1" max="60" value="6" />
           </div>
           <div>
-            <label for="pathCount">ECMP paths</label>
+            <label for="pathCount">Default ECMP paths</label>
             <input id="pathCount" type="number" min="1" max="20" value="4" />
           </div>
         </div>
@@ -519,6 +535,15 @@
           </div>
         </div>
 
+        <div class="conn-header" id="connHeader">
+          <div></div>
+          <span>From</span>
+          <span>To</span>
+          <span>Rate</span>
+          <span>ECMP</span>
+          <span></span>
+          <span></span>
+        </div>
         <div class="conn-list" id="connList"></div>
         <div class="vresize-handle" id="connListResize"></div>
       </div>
@@ -690,12 +715,14 @@
 
   function createConnectionsFromPairs(pairs, label) {
     const rate = Math.max(1, parseInt(rateInput.value, 10) || 1);
+    const pathCount = Math.max(1, parseInt(pathCountInput.value, 10) || 1);
     connections = pairs.map((pair, index) => {
       const conn = {
         id: Date.now() + Math.random(),
         src: pair[0],
         dst: pair[1],
         rate,
+        pathCount,
         active: true,
         accumulator: 0,
         paths: [],
@@ -1035,6 +1062,12 @@
       rate.max = "120";
       rate.value = conn.rate;
 
+      const ecmp = document.createElement("input");
+      ecmp.type = "number";
+      ecmp.min = "1";
+      ecmp.max = "20";
+      ecmp.value = conn.pathCount;
+
       const active = document.createElement("input");
       active.type = "checkbox";
       active.checked = conn.active;
@@ -1059,6 +1092,13 @@
         conn.rate = Math.max(1, parseInt(rate.value, 10) || 1);
         rate.value = conn.rate;
       });
+      ecmp.addEventListener("change", () => {
+        conn.pathCount = Math.max(1, parseInt(ecmp.value, 10) || 1);
+        ecmp.value = conn.pathCount;
+        updateConnectionPaths(conn);
+        lastHighlightedPaths = getHighlightPaths();
+        rebuildPathHighlights(lastHighlightedPaths);
+      });
       active.addEventListener("change", () => {
         conn.active = active.checked;
         lastHighlightedPaths = getHighlightPaths();
@@ -1076,6 +1116,7 @@
       row.appendChild(srcSel);
       row.appendChild(dstSel);
       row.appendChild(rate);
+      row.appendChild(ecmp);
       row.appendChild(active);
       row.appendChild(remove);
       connList.appendChild(row);
@@ -1087,7 +1128,7 @@
       conn.paths = [];
       return;
     }
-    const pathCount = Math.max(1, parseInt(pathCountInput.value, 10) || 1);
+    const pathCount = conn.pathCount ?? Math.max(1, parseInt(pathCountInput.value, 10) || 1);
     conn.paths = uniqueEcmpPaths(graph, conn.src, conn.dst, pathCount);
   }
 
@@ -1651,6 +1692,7 @@
       src,
       dst,
       rate: Math.max(1, parseInt(rateInput.value, 10) || 1),
+      pathCount: Math.max(1, parseInt(pathCountInput.value, 10) || 1),
       active: true,
       accumulator: 0,
       paths: [],
@@ -1663,14 +1705,6 @@
     lastHighlightedPaths = getHighlightPaths();
     rebuildPathHighlights(lastHighlightedPaths);
     log(`Connection added: ${src} → ${dst} (${conn.rate} pps).`);
-  });
-
-  pathCountInput.addEventListener("change", () => {
-    connections.forEach((conn) => updateConnectionPaths(conn));
-    if (connections.length) {
-      lastHighlightedPaths = getHighlightPaths();
-      rebuildPathHighlights(lastHighlightedPaths);
-    }
   });
 
   presetPermutationBtn.addEventListener("click", () => {
