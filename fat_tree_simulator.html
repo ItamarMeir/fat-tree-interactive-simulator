@@ -465,13 +465,13 @@
           </div>
           <div>
             <label for="k">k-ary (even)</label>
-            <input id="k" type="number" min="2" step="2" value="8" />
+            <input id="k" type="number" min="2" step="2" value="4" />
           </div>
         </div>
         <div class="row">
           <div>
             <label for="linkRate">Link rate (pps)</label>
-            <input id="linkRate" type="number" min="1" max="500" value="80" />
+            <input id="linkRate" type="number" min="1" max="500" value="10" />
           </div>
           <div>
             <label for="baseRtt">BDP RTT (ms)</label>
@@ -541,7 +541,7 @@
           <span>To</span>
           <span>Rate</span>
           <span>ECMP</span>
-          <span></span>
+          <input type="checkbox" id="selectAllConns" checked title="Select all" style="margin:0 auto;display:block;" />
           <span></span>
         </div>
         <div class="conn-list" id="connList"></div>
@@ -685,8 +685,17 @@
 
   function getHighlightPaths() {
     return connections
-      .filter((conn) => conn.paths && conn.paths.length)
+      .filter((conn) => conn.active && conn.paths && conn.paths.length)
       .flatMap((conn) => conn.paths.map((path) => ({ edges: path, color: conn.color })));
+  }
+
+  function updateSelectAllState() {
+    const cb = document.getElementById("selectAllConns");
+    if (!cb) return;
+    const total = connections.length;
+    const selectedCount = connections.filter(c => c.active).length;
+    cb.indeterminate = selectedCount > 0 && selectedCount < total;
+    cb.checked = total > 0 && selectedCount === total;
   }
 
   function clampK(k) {
@@ -1101,6 +1110,7 @@
       });
       active.addEventListener("change", () => {
         conn.active = active.checked;
+        updateSelectAllState();
         lastHighlightedPaths = getHighlightPaths();
         rebuildPathHighlights(lastHighlightedPaths);
       });
@@ -1121,6 +1131,7 @@
       row.appendChild(remove);
       connList.appendChild(row);
     });
+    updateSelectAllState();
   }
 
   function updateConnectionPaths(conn) {
@@ -1705,6 +1716,13 @@
     lastHighlightedPaths = getHighlightPaths();
     rebuildPathHighlights(lastHighlightedPaths);
     log(`Connection added: ${src} → ${dst} (${conn.rate} pps).`);
+  });
+
+  document.getElementById("selectAllConns").addEventListener("change", (e) => {
+    connections.forEach(c => { c.active = e.target.checked; });
+    refreshConnectionList();
+    lastHighlightedPaths = getHighlightPaths();
+    rebuildPathHighlights(lastHighlightedPaths);
   });
 
   presetPermutationBtn.addEventListener("click", () => {
