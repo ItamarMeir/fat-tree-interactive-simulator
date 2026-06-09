@@ -247,6 +247,36 @@
     stroke-width: 1.2;
   }
 
+  svg { cursor: grab; }
+  svg.panning { cursor: grabbing; }
+
+  .zoom-reset-btn {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+    color: var(--ink);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    transition: background 0.15s, border-color 0.15s;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+  .zoom-reset-btn:hover {
+    background: #f0ebe5;
+    border-color: var(--accent);
+  }
+  .zoom-reset-btn:active {
+    background: #e5dfd5;
+  }
+
   .path-label {
     font-size: 11px;
     fill: var(--path);
@@ -582,6 +612,7 @@
 
   <section class="canvas-wrap">
     <svg id="topology" viewBox="0 0 1200 600" aria-label="Fat-tree topology"></svg>
+    <button class="zoom-reset-btn" id="resetViewBtn" title="Reset zoom and pan (0)">⟳</button>
   </section>
 </div>
 
@@ -633,8 +664,17 @@
   const svgNodeEls = new Map();
   let pathLayerEl = null;
   let packetLayerEl = null;
+  let zoomLayerEl = null;
   const _colorCache = new Map();
   const MAX_VISUAL_PACKETS = 250;
+
+  let viewState = { scale: 1, tx: 0, ty: 0 };
+  let viewDirty = false;
+  let isPanning = false;
+  let panStartX = 0;
+  let panStartY = 0;
+  let panStartTx = 0;
+  let panStartTy = 0;
 
   const connColors = [
     "#9d3c3c",
@@ -909,10 +949,42 @@
     return model;
   }
 
+  function applyViewTransform() {
+    if (!zoomLayerEl) return;
+    zoomLayerEl.setAttribute('transform', `translate(${viewState.tx},${viewState.ty}) scale(${viewState.scale})`);
+  }
+
+  function svgPointToScreen(svgX, svgY) {
+    const rect = svg.getBoundingClientRect();
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return { x: 0, y: 0 };
+    const point = svg.createSVGPoint();
+    point.x = svgX;
+    point.y = svgY;
+    const transformed = point.matrixTransform(ctm);
+    return { x: transformed.x, y: transformed.y };
+  }
+
+  function screenPointToSvg(screenX, screenY) {
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return { x: 0, y: 0 };
+    const inverse = ctm.inverse();
+    const point = svg.createSVGPoint();
+    point.x = screenX;
+    point.y = screenY;
+    const transformed = point.matrixTransform(inverse);
+    return { x: transformed.x, y: transformed.y };
+  }
+
   function buildStaticGraphSVG(model) {
     svg.innerHTML = "";
     svgLinkEls.clear();
     svgNodeEls.clear();
+
+    zoomLayerEl = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    zoomLayerEl.id = "zoomLayer";
+    svg.appendChild(zoomLayerEl);
+    applyViewTransform();
 
     if (model.layers.includes("agg")) {
       const pods = new Map();
@@ -933,13 +1005,13 @@
         band.setAttribute("height", 390);
         band.setAttribute("class", "pod-band");
         band.setAttribute("fill", pod % 2 === 0 ? "#f4eee6" : "#efe6db");
-        svg.appendChild(band);
+        zoomLayerEl.appendChild(band);
         const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
         label.setAttribute("x", minX + 8);
         label.setAttribute("y", 175);
         label.setAttribute("class", "pod-label");
         label.textContent = `Pod ${pod}`;
-        svg.appendChild(label);
+        zoomLayerEl.appendChild(label);
       });
     }
 
@@ -957,12 +1029,12 @@
       const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
       title.textContent = "";
       line.appendChild(title);
-      svg.appendChild(line);
+      zoomLayerEl.appendChild(line);
       svgLinkEls.set(link.key, { line, title });
     });
 
     pathLayerEl = document.createElementNS("http://www.w3.org/2000/svg", "g");
-    svg.appendChild(pathLayerEl);
+    zoomLayerEl.appendChild(pathLayerEl);
 
     model.nodes.forEach((node) => {
       const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
@@ -971,18 +1043,18 @@
       circle.setAttribute("r", node.layer === "host" ? 8 : 12);
       circle.setAttribute("fill", node.color);
       circle.setAttribute("class", "node");
-      svg.appendChild(circle);
+      zoomLayerEl.appendChild(circle);
       svgNodeEls.set(node.id, circle);
       const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
       label.setAttribute("x", node.x + 14);
       label.setAttribute("y", node.y + 4);
       label.setAttribute("class", "node-label");
       label.textContent = node.label;
-      svg.appendChild(label);
+      zoomLayerEl.appendChild(label);
     });
 
     packetLayerEl = document.createElementNS("http://www.w3.org/2000/svg", "g");
-    svg.appendChild(packetLayerEl);
+    zoomLayerEl.appendChild(packetLayerEl);
   }
 
   function updateDynamicGraphStyles(now) {
@@ -1522,6 +1594,10 @@
     }
 
     renderPackets();
+    if (viewDirty) {
+      applyViewTransform();
+      viewDirty = false;
+    }
     requestAnimationFrame(tick);
   }
 
@@ -1615,6 +1691,7 @@
   }
 
   function rebuild() {
+    viewState = { scale: 1, tx: 0, ty: 0 };
     const tiers = parseInt(tiersSelect.value, 10);
     const k = clampK(parseInt(kInput.value, 10));
     kInput.value = k;
@@ -1740,6 +1817,85 @@
       return;
     }
     createConnectionsFromPairs(pairs, "Tornado");
+  });
+
+  // --- Zoom and pan controls ---
+  svg.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    if (!zoomLayerEl) return;
+    const delta = e.deltaY > 0 ? 0.85 : 1.15;
+    const oldScale = viewState.scale;
+    viewState.scale = Math.max(0.3, Math.min(8, viewState.scale * delta));
+    const svgPoint = screenPointToSvg(e.clientX, e.clientY);
+    viewState.tx = svgPoint.x - (svgPoint.x - viewState.tx) * (viewState.scale / oldScale);
+    viewState.ty = svgPoint.y - (svgPoint.y - viewState.ty) * (viewState.scale / oldScale);
+    viewDirty = true;
+  }, { passive: false });
+
+  svg.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    isPanning = true;
+    const svgPoint = screenPointToSvg(e.clientX, e.clientY);
+    panStartX = svgPoint.x;
+    panStartY = svgPoint.y;
+    panStartTx = viewState.tx;
+    panStartTy = viewState.ty;
+    svg.classList.add('panning');
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isPanning || !zoomLayerEl) return;
+    const svgPoint = screenPointToSvg(e.clientX, e.clientY);
+    const deltaX = svgPoint.x - panStartX;
+    const deltaY = svgPoint.y - panStartY;
+    viewState.tx = panStartTx + deltaX * viewState.scale;
+    viewState.ty = panStartTy + deltaY * viewState.scale;
+    viewDirty = true;
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!isPanning) return;
+    isPanning = false;
+    svg.classList.remove('panning');
+  });
+
+  document.getElementById('resetViewBtn').addEventListener('click', () => {
+    viewState = { scale: 1, tx: 0, ty: 0 };
+    viewDirty = true;
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (document.activeElement !== document.body) return;
+    if (e.key === '+' || e.key === '=') {
+      e.preventDefault();
+      viewState.scale = Math.max(0.3, Math.min(8, viewState.scale * 1.2));
+      viewDirty = true;
+    } else if (e.key === '-') {
+      e.preventDefault();
+      viewState.scale = Math.max(0.3, Math.min(8, viewState.scale / 1.2));
+      viewDirty = true;
+    } else if (e.key === '0') {
+      e.preventDefault();
+      viewState = { scale: 1, tx: 0, ty: 0 };
+      viewDirty = true;
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      viewState.tx -= 50;
+      viewDirty = true;
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      viewState.tx += 50;
+      viewDirty = true;
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      viewState.ty -= 50;
+      viewDirty = true;
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      viewState.ty += 50;
+      viewDirty = true;
+    }
   });
 
   // --- Vertical drag-to-resize for scrollable lists ---
